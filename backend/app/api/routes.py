@@ -91,13 +91,20 @@ def queue_reminder(payload: ReminderCreate, db: Session = Depends(get_db), user:
     db.add(reminder); db.commit(); db.refresh(reminder)
     return {"id": reminder.id, "status": reminder.status}
 
-@router.get("/dashboard", response_model=DashboardMetrics)
-def dashboard(db: Session = Depends(get_db), user: User = Depends(current_user)):
+def get_dashboard_metrics(db: Session) -> DashboardMetrics:
     receivables = db.query(func.coalesce(func.sum(Invoice.total - Invoice.amount_paid), 0)).filter(Invoice.invoice_type == InvoiceType.sales).scalar()
     payables = db.query(func.coalesce(func.sum(Invoice.total - Invoice.amount_paid), 0)).filter(Invoice.invoice_type == InvoiceType.purchase).scalar()
     overdue = db.query(Invoice).filter(Invoice.due_date < date.today(), Invoice.status != InvoiceStatus.paid).count()
     customers = db.query(Party).filter(Party.type == "customer").count()
     return DashboardMetrics(total_receivables=float(receivables), total_payables=float(payables), overdue_invoices=overdue, open_customers=customers)
+
+@router.get("/dashboard", response_model=DashboardMetrics)
+def dashboard(db: Session = Depends(get_db), user: User = Depends(current_user)):
+    return get_dashboard_metrics(db)
+
+@router.get("/live-metrics", response_model=DashboardMetrics)
+def live_metrics(db: Session = Depends(get_db)):
+    return get_dashboard_metrics(db)
 
 @router.get("/reports/aging")
 def aging_report(db: Session = Depends(get_db), user: User = Depends(current_user)):
