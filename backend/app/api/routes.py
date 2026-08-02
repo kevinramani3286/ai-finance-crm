@@ -15,10 +15,10 @@ from ..services.ai_extraction import extract_invoice_fields, read_document_text
 router = APIRouter(prefix="/api")
 
 @router.post("/auth/register", response_model=UserRead)
-def register(payload: UserCreate, db: Session = Depends(get_db)):
+def register(payload: UserRegister, db: Session = Depends(get_db)):
     if db.query(User).filter(User.email == payload.email).first():
         raise HTTPException(409, "Email already registered")
-    user = User(email=payload.email, full_name=payload.full_name, hashed_password=hash_password(payload.password), role=payload.role)
+    user = User(email=payload.email, full_name=payload.full_name, hashed_password=hash_password(payload.password), role=Role.viewer)
     db.add(user); db.commit(); db.refresh(user)
     return user
 

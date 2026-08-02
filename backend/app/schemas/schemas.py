@@ -6,10 +6,12 @@ class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
 
-class UserCreate(BaseModel):
+class UserRegister(BaseModel):
     email: str
     full_name: str
     password: str
+
+class UserCreate(UserRegister):
     role: Role = Role.viewer
 
 class UserRead(BaseModel):
