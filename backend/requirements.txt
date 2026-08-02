@@ -7,3 +7,9 @@ python-jose[cryptography]
 passlib[bcrypt]
 pydantic
 python-multipart
+email-validator
+pypdf
+pytesseract
+Pillow
+pytest
+httpx
