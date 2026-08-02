@@ -103,7 +103,7 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(current_user))
     return get_dashboard_metrics(db)
 
 @router.get("/live-metrics", response_model=DashboardMetrics)
-def live_metrics(db: Session = Depends(get_db)):
+def live_metrics(db: Session = Depends(get_db), user: User = Depends(current_user)):
     return get_dashboard_metrics(db)
 
 @router.get("/reports/aging")
