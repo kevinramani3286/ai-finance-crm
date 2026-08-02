@@ -1,15 +1,33 @@
-# AI Finance CRM
+# AI Finance CRM ERP
 
-Starter scaffold for an AI-powered finance CRM with invoice upload, payment tracking, and reminders.
+Production-oriented AI finance CRM/ERP scaffold with React + Vite + TypeScript + Tailwind/shadcn-style UI and a FastAPI + SQLAlchemy backend.
 
-## Structure
+## Modules
 
-- `frontend/` — React app
-- `backend/` — FastAPI app
-- `database/` — SQL schema and migrations
+- JWT authentication and role-based access control
+- Dashboard KPIs
+- Customers and suppliers
+- Sales and purchase invoices
+- PDF/image upload with OCR fallback
+- AI-assisted invoice field extraction
+- Payment tracking
+- WhatsApp and email reminder queue
+- Reports and invoice aging
 
-## Next steps
+## Run locally
 
-1. Set up the frontend.
-2. Set up the backend.
-3. Connect PDF upload and invoice extraction.
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+- API: <http://localhost:8000>
+- Frontend: <http://localhost:5173>
+- API docs: <http://localhost:8000/docs>
+
+## Backend tests
+
+```bash
+cd backend
+DATABASE_URL=sqlite:///./test.db PYTHONPATH=. pytest
+```
