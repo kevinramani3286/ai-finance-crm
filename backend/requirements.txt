@@ -9,6 +9,7 @@ pydantic
 python-multipart
 email-validator
 pypdf
+pdf2image
 pytesseract
 Pillow
 pytest

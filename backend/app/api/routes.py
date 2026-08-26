@@ -1,5 +1,6 @@
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
+from uuid import uuid4
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import func
@@ -10,7 +11,7 @@ from ..core.security import create_access_token, hash_password, verify_password
 from ..database import get_db
 from ..models.entities import Invoice, InvoiceStatus, InvoiceType, Party, Payment, Reminder, Role, User
 from ..schemas.schemas import *
-from ..services.ai_extraction import extract_invoice_fields, read_document_text
+from ..services.ai_extraction import extract_document_fields, extract_invoice_fields, read_document_text
 
 router = APIRouter(prefix="/api")
 
@@ -67,13 +68,32 @@ def add_invoice(payload: InvoiceCreate, db: Session = Depends(get_db), user: Use
 @router.post("/invoices/upload")
 def upload_invoice(invoice_type: InvoiceType, file: UploadFile = File(...), db: Session = Depends(get_db), user: User = Depends(require_roles(Role.admin, Role.finance))):
     Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
-    dest = Path(settings.upload_dir) / file.filename
+    suffix = Path(file.filename or "document.pdf").suffix.lower()
+    dest = Path(settings.upload_dir) / f"{uuid4().hex}{suffix}"
     dest.write_bytes(file.file.read())
     text = read_document_text(str(dest))
     fields = extract_invoice_fields(text)
     inv = Invoice(invoice_type=invoice_type, invoice_number=fields["invoice_number"], subtotal=fields["subtotal"], total=fields["total"], source_file=str(dest), extracted_text=text)
     db.add(inv); db.commit(); db.refresh(inv)
     return {"invoice": InvoiceRead.model_validate(inv), "extraction": fields}
+
+@router.post("/ocr/analyze")
+def analyze_document(document_type: str = "invoice", file: UploadFile = File(...)):
+    """Universal OCR entry point used by invoice, payment, purchase, bank, quotation and expense screens."""
+    Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
+    suffix = Path(file.filename or "document.pdf").suffix.lower()
+    dest = Path(settings.upload_dir) / f"ocr-{uuid4().hex}{suffix}"
+    dest.write_bytes(file.file.read())
+    text = read_document_text(str(dest))
+    fields = extract_document_fields(text, document_type)
+    return {
+        "file_name": file.filename,
+        "document_type": document_type,
+        "status": "review" if fields["confidence"] < 0.80 else "ready",
+        "confidence": fields["confidence"],
+        "fields": fields,
+        "text_preview": text[:4000],
+    }
 
 @router.post("/payments", response_model=PaymentRead)
 def add_payment(payload: PaymentCreate, db: Session = Depends(get_db), user: User = Depends(require_roles(Role.admin, Role.finance))):
@@ -105,6 +125,73 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(current_user))
 @router.get("/live-metrics", response_model=DashboardMetrics)
 def live_metrics(db: Session = Depends(get_db)):
     return get_dashboard_metrics(db)
+
+@router.get("/dashboard/summary")
+def dashboard_summary(db: Session = Depends(get_db)):
+    today = date.today()
+    fiscal_start_year = today.year if today.month >= 4 else today.year - 1
+    fy_start = date(fiscal_start_year, 4, 1)
+    fy_end = date(fiscal_start_year + 1, 3, 31)
+
+    sales = db.query(Invoice).filter(Invoice.invoice_type == InvoiceType.sales, Invoice.issue_date >= fy_start, Invoice.issue_date <= fy_end).all()
+    purchases = db.query(Invoice).filter(Invoice.invoice_type == InvoiceType.purchase, Invoice.issue_date >= fy_start, Invoice.issue_date <= fy_end).all()
+    collections = db.query(Payment).filter(Payment.paid_at >= fy_start, Payment.paid_at <= fy_end).all()
+    total_sales = sum(float(x.total or 0) for x in sales)
+    total_purchase = sum(float(x.total or 0) for x in purchases)
+    total_collections = sum(float(x.amount or 0) for x in collections)
+    outstanding = sum(max(0, float(x.total or 0) - float(x.amount_paid or 0)) for x in sales)
+    overdue_amount = sum(max(0, float(x.total or 0) - float(x.amount_paid or 0)) for x in sales if x.due_date and x.due_date < today and x.status != InvoiceStatus.paid)
+
+    aging = {"0-7": 0.0, "8-30": 0.0, "31-60": 0.0, "61-90": 0.0, "90+": 0.0}
+    open_sales = [x for x in sales if x.status != InvoiceStatus.paid]
+    for inv in open_sales:
+        age = max(0, (today - (inv.due_date or today)).days)
+        amount = max(0, float(inv.total or 0) - float(inv.amount_paid or 0))
+        if age <= 7: aging["0-7"] += amount
+        elif age <= 30: aging["8-30"] += amount
+        elif age <= 60: aging["31-60"] += amount
+        elif age <= 90: aging["61-90"] += amount
+        else: aging["90+"] += amount
+
+    top = []
+    by_party = {}
+    for inv in open_sales:
+        name = inv.party.name if inv.party else "Unassigned customer"
+        by_party[name] = by_party.get(name, 0.0) + max(0, float(inv.total or 0) - float(inv.amount_paid or 0))
+    for name, amount in sorted(by_party.items(), key=lambda x: x[1], reverse=True)[:5]:
+        top.append({"name": name, "amount": round(amount, 2)})
+
+    payment_modes = {}
+    for p in collections:
+        key = p.method or "Other"
+        payment_modes[key] = payment_modes.get(key, 0.0) + float(p.amount or 0)
+
+    months = []
+    cursor = fy_start
+    for i in range(12):
+        month = cursor.month
+        year = cursor.year
+        next_month = date(year + (1 if month == 12 else 0), 1 if month == 12 else month + 1, 1)
+        sales_value = sum(float(x.total or 0) for x in sales if x.issue_date and date(x.issue_date.year, x.issue_date.month, 1) == date(year, month, 1))
+        collected_value = sum(float(x.amount or 0) for x in collections if x.paid_at and date(x.paid_at.year, x.paid_at.month, 1) == date(year, month, 1))
+        months.append({"label": cursor.strftime("%b"), "sales": round(sales_value, 2), "collections": round(collected_value, 2)})
+        cursor = next_month
+
+    return {
+        "financial_year": f"FY {fiscal_start_year}-{str(fiscal_start_year + 1)[-2:]}",
+        "total_sales": round(total_sales, 2),
+        "total_collections": round(total_collections, 2),
+        "outstanding": round(outstanding, 2),
+        "overdue": round(overdue_amount, 2),
+        "profit": round(total_sales - total_purchase, 2),
+        "expenses": 0.0,
+        "aging": aging,
+        "top_customers": top,
+        "payment_modes": payment_modes,
+        "trend": months,
+        "invoice_count": len(sales),
+        "payments_count": len(collections),
+    }
 
 @router.get("/reports/aging")
 def aging_report(db: Session = Depends(get_db), user: User = Depends(current_user)):
